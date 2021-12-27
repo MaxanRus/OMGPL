@@ -1,8 +1,6 @@
 #include "preprocessor.hpp"
 #include <vector>
 
-#include <iostream> // TODO
-
 std::string DeleteComments(std::string&& text) {
   std::vector<std::pair<int, int>> text_without_comments;
   size_t n = text.size();

@@ -6,8 +6,6 @@
 
 using Type = Lexer::LexerToken::Type;
 
-std::unordered_set<std::string> special_words = {"def"};
-
 bool IsOperation(Type type) {
   switch (type) {
     case Type::Equal:
@@ -69,6 +67,14 @@ void Container::AddChildren(Node* node) {
   } else {
     children_begin = children_end = node;
     node->parent = this;
+  }
+}
+
+void Container::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
+  Node* current = children_begin;
+  while (current) {
+    current->Run(stack);
+    current = current->next;
   }
 }
 
@@ -147,6 +153,54 @@ PriorityType Expression::GetPriorityType(Operation op) {
   throw std::logic_error("unsupported operator");
 }
 
+void Expression::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
+  if (op == Operation::Value) {
+    if (std::holds_alternative<size_t>(type1)) {
+      stack.push_back(*(stack.end() - std::get<size_t>(type1)));
+    } else {
+      stack.push_back(std::make_shared<VariableInStack>(TypeVariable()));
+      if (std::get<std::string>(type1)[0] == '\"') {
+        stack.back()->type_variable = TypeVariable(TypeVariable::ID::type_string);
+        stack.back()->Allocate();
+        (*(std::string*) stack.back()->memory) =
+            std::get<std::string>(type1).substr(1, std::get<std::string>(type1).size() - 2);
+      } else {
+        stack.back()->type_variable = TypeVariable(TypeVariable::ID::type_int);
+        stack.back()->Allocate();
+        (*(int*) stack.back()->memory) = std::atoi(std::get<std::string>(type1).c_str());
+      }
+    }
+  } else {
+    std::get<Expression*>(type1)->Run(stack);
+    std::shared_ptr<VariableInStack> x = std::move(stack.back());
+    stack.pop_back();
+    std::get<Expression*>(type2)->Run(stack);
+    std::shared_ptr<VariableInStack> y = std::move(stack.back());
+    stack.pop_back();
+    stack.push_back(std::make_shared<VariableInStack>(TypeVariable()));
+    x->CallOperator(y, stack.back(), op);
+  }
+}
+
+void Expression::AddStackPointer(stack_pointer d) {
+  position_result += d;
+}
+
+Expression::Expression(Expression::Types type1, Expression::Types type2, Operation op) : type1(std::move(type1)), type2(std::move(type2)), op(op) {
+  if (op == Operation::Value) {
+    count = 1;
+  } else {
+    count = 1;
+    auto e_type1 = std::get<Expression*>(type1);
+    auto e_type2 = std::get<Expression*>(type2);
+    count += e_type1->count;
+    count += e_type2->count;
+
+    position_result = count;
+    e_type2->AddStackPointer(e_type1->count);
+  }
+}
+
 bool SyntaxTree::IsTypeName(Node* node, const std::string& str) {
   return str == "int" || str == "string";
 }
@@ -198,78 +252,18 @@ void SyntaxTree::PushCurlyBrackets(Container* container, const LexerTokenList& l
   container->AddChildren(ParseCurlyBrackets(container, list, it));
 }
 
-/*
-void SyntaxTree::PushRoundBrackets(Container* container, const LexerTokenList& list,
-                                   LexerTokenList::const_iterator& it) {
-  RoundBrackets* current = new RoundBrackets();
-  container->AddChildren(current);
-
-  for (; it->type != Type::RoundCloseBracket; ++it) {
-    if (it->type == Type::Word) {
-      if (IsTypeName(container->children_end, it->info)) {
-        std::string type = it->info;
-        ++it;
-        if (it->type == Type::Word) {
-          container->AddChildren(new Variable(std::move(type), it->info));
-        }
-      } else if (IsVariableName(container->children_end, it->info)) {
-        ++it;
-        // TODO
-      }
-    } else {
-      throw std::logic_error("I expected type or name");
-    }
-  }
-}
- */
-
-/*
-void SyntaxTree::PushFunction(Container* container, const LexerTokenList& list,
-                              LexerTokenList::const_iterator& it) {
-  if (it->type == Type::Word && !IsSpecialWord(it->info)) {
-    auto func = new Function(it->info);
-    ++it;
-    if (it->type == Type::RoundOpenBracket) {
-      PushRoundBrackets(func->parameters, list, ++it);
-      ++it;
-      if (it->type == Type::RArrow) {
-        ++it;
-        if (it->type == Type::Word && IsTypeName(container->children_end, it->info)) {
-          ++it;
-          if (it->type == Type::CurlyOpenBracket) {
-            PushCurlyBrackets(func->code, list, ++it);
-            container->AddChildren(func);
-          } else {
-            throw std::logic_error("Invalid function body");
-          }
-        } else {
-          throw std::logic_error("Invalit return type");
-        }
-      } else {
-        throw std::logic_error("Missing -> in function");
-      }
-    } else {
-      throw std::logic_error("Invalid function parameters");
-    }
-  } else {
-    throw std::logic_error("Invalid function name");
-  }
-}
- */
-
 void SyntaxTree::PushLine(Container* container, const LexerTokenList& list,
                           LexerTokenList::const_iterator& it) {
   if (it->type == Type::CurlyOpenBracket) {
     PushCurlyBrackets(container, list, ++it);
   } else if (it->type == Type::RoundOpenBracket) {
     PushExpression(container, list, it);
-    // PushRoundBrackets(container, list, ++it);
   } else if (it->type == Type::IF) {
-    PushIF(container, list, it);
+    PushBlockIf(container, list, it);
   } else if (it->type == Type::FOR) {
-    PushFOR(container, list, it);
+    PushBlockFor(container, list, it);
   } else if (it->type == Type::WHILE) {
-    PushWHILE(container, list, it);
+    PushBlockWhile(container, list, it);
   } else if (it->type == Type::Word) {
     auto place = container->children_end;
     if (!place)
@@ -350,13 +344,13 @@ void SyntaxTree::PushCallFunction(Container* container,
   container->AddChildren(new HiddenDeallocateStack(function->parameters.size()));
 }
 
-void SyntaxTree::PushFOR(Container* container,
-                         const LexerTokenList& list,
-                         std::list<Lexer::LexerToken>::const_iterator& it) {
+void SyntaxTree::PushBlockFor(Container* container,
+                              const LexerTokenList& list,
+                              std::list<Lexer::LexerToken>::const_iterator& it) {
   auto c = new Container;
-  auto f = new FOR();
+  auto f = new BlockFor();
   container->AddChildren(c);
-  PushSignatureFOR(f, list, ++it);
+  PushSignatureBlockFor(f, list, ++it);
   c->AddChildren(f->var);
   c->AddChildren(f);
   if (it->type != Type::CurlyOpenBracket) {
@@ -367,9 +361,9 @@ void SyntaxTree::PushFOR(Container* container,
   f->code->previous = nullptr;
 }
 
-void SyntaxTree::PushSignatureFOR(FOR* node_for,
-                                  const LexerTokenList& list,
-                                  std::list<Lexer::LexerToken>::const_iterator& it) {
+void SyntaxTree::PushSignatureBlockFor(BlockFor* node_for,
+                                       const LexerTokenList& list,
+                                       std::list<Lexer::LexerToken>::const_iterator& it) {
   if (it->type != Type::RoundOpenBracket)
     throw std::logic_error("expected ( after for");
   ++it;
@@ -408,12 +402,12 @@ void SyntaxTree::PushSignatureFOR(FOR* node_for,
   }
 }
 
-void SyntaxTree::PushIF(Container* container,
-                        const LexerTokenList& list,
-                        std::list<Lexer::LexerToken>::const_iterator& it) {
-  auto f = new IF();
+void SyntaxTree::PushBlockIf(Container* container,
+                             const LexerTokenList& list,
+                             std::list<Lexer::LexerToken>::const_iterator& it) {
+  auto f = new BlockIf();
   container->AddChildren(f);
-  PushSignatureIF(f, list, ++it);
+  PushSignatureBlockIf(f, list, ++it);
   f->check->parent = f;
   if (it->type != Type::CurlyOpenBracket) {
     throw std::logic_error("expected { after if (...)");
@@ -422,9 +416,9 @@ void SyntaxTree::PushIF(Container* container,
   f->code->parent = f;
 }
 
-void SyntaxTree::PushSignatureIF(IF* node_if,
-                                 const LexerTokenList& list,
-                                 std::list<Lexer::LexerToken>::const_iterator& it) {
+void SyntaxTree::PushSignatureBlockIf(BlockIf* node_if,
+                                      const LexerTokenList& list,
+                                      std::list<Lexer::LexerToken>::const_iterator& it) {
   if (it->type != Type::RoundOpenBracket)
     throw std::logic_error("expected ( after if");
   ++it;
@@ -436,21 +430,21 @@ void SyntaxTree::PushSignatureIF(IF* node_if,
   ++it;
 }
 
-void SyntaxTree::PushWHILE(Container* container,
-                           const LexerTokenList& list,
-                           std::list<Lexer::LexerToken>::const_iterator& it) {
-  auto f = new WHILE();
+void SyntaxTree::PushBlockWhile(Container* container,
+                                const LexerTokenList& list,
+                                std::list<Lexer::LexerToken>::const_iterator& it) {
+  auto f = new BlockWhile();
   container->AddChildren(f);
-  PushSignatureWHILE(f, list, ++it);
+  PushSignatureBlockWhile(f, list, ++it);
   if (it->type != Type::CurlyOpenBracket) {
     throw std::logic_error("expected { after while (...)");
   }
   f->code = ParseCurlyBrackets(container, list, ++it);
 }
 
-void SyntaxTree::PushSignatureWHILE(WHILE* node_if,
-                                    const LexerTokenList& list,
-                                    std::list<Lexer::LexerToken>::const_iterator& it) {
+void SyntaxTree::PushSignatureBlockWhile(BlockWhile* node_if,
+                                         const LexerTokenList& list,
+                                         std::list<Lexer::LexerToken>::const_iterator& it) {
   if (it->type != Type::RoundOpenBracket)
     throw std::logic_error("expected ( after while");
   ++it;
@@ -539,10 +533,10 @@ void SyntaxTree::PushDeallocateStack(Node* node, size_t count_variables = 0) {
       PushDeallocateStack(code_block->children_begin);
     }
   }
-  if (auto if_ = dynamic_cast<IF*>(node)) {
+  if (auto if_ = dynamic_cast<BlockIf*>(node)) {
     PushDeallocateStack(if_->code);
   }
-  if (auto for_ = dynamic_cast<FOR*>(node)) {
+  if (auto for_ = dynamic_cast<BlockFor*>(node)) {
     PushDeallocateStack(for_->code);
   }
   if (dynamic_cast<Variable*>(node)) {
@@ -580,15 +574,15 @@ void SyntaxTree::LinkVariables(Node* node) {
         LinkVariablesInExpression(var->default_value, node);
       }
     }
-    if (auto if_ = dynamic_cast<IF*>(node)) {
+    if (auto if_ = dynamic_cast<BlockIf*>(node)) {
       LinkVariablesInExpression(if_->check, node);
       LinkVariables(if_->code->children_begin);
     }
-    if (auto while_ = dynamic_cast<WHILE*>(node)) {
+    if (auto while_ = dynamic_cast<BlockWhile*>(node)) {
       LinkVariablesInExpression(while_->check, node);
       LinkVariables(while_->code->children_begin);
     }
-    if (auto for_ = dynamic_cast<FOR*>(node)) {
+    if (auto for_ = dynamic_cast<BlockFor*>(node)) {
       LinkVariablesInExpression(for_->check, node);
       LinkVariablesInExpression(for_->tick, node);
       LinkVariables(for_->code->children_begin);
@@ -675,6 +669,259 @@ void Variable::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
   stack.back()->Allocate();
   if (default_value) {
     default_value->Run(stack);
+    stack.pop_back();
+  }
+}
+
+void VariableInStack::CallOperator(std::shared_ptr<VariableInStack>& another,
+                                   std::shared_ptr<VariableInStack>& result,
+                                   Operation op) {
+  if (op == Operation::Equal || op == Operation::PlusEqual || op == Operation::MinusEqual
+      || op == Operation::StarEqual || op == Operation::SlashEqual) {
+    CallEqualOperator(another, result, op);
+    return;
+  }
+  if (op == Operation::EqualEqual || op == Operation::ExclamationMarkEqual || op == Operation::LAngle
+      || op == Operation::RAngle || op == Operation::LAngleEqual || op == Operation::RAngleEqual) {
+    CallComparisonOperator(another, result, op);
+    return;
+  }
+  if (op == Operation::Plus || op == Operation::Minus || op == Operation::Star || op == Operation::Slash) {
+    CallArithmeticOperator(another, result, op);
+    return;
+  }
+}
+
+void VariableInStack::CallArithmeticOperator(const std::shared_ptr<VariableInStack>& another,
+                                             std::shared_ptr<VariableInStack>& result,
+                                             const Operation& op) const {
+  result->Clear();
+  result->type_variable.id = another->type_variable.id;
+  result->Allocate();
+  if (another->type_variable.id == TypeVariable::type_int && type_variable.id == TypeVariable::type_int) {
+    int& x = *static_cast<int*>(memory);
+    int& y = *static_cast<int*>(another->memory);
+    int& res = *static_cast<int*>(result->memory);
+    if (op == Operation::Plus) {
+      res = (x + y);
+    } else if (op == Operation::Minus) {
+      res = (x - y);
+    } else if (op == Operation::Star) {
+      res = (x * y);
+    } else if (op == Operation::Slash) {
+      res = (x / y);
+    }
+  } else if (another->type_variable.id == TypeVariable::type_string
+      && type_variable.id == TypeVariable::type_string) {
+    std::string& x = *static_cast<std::string*>(memory);
+    std::string& y = *static_cast<std::string*>(another->memory);
+    std::string& res = *static_cast<std::string*>(result->memory);
+    if (op == Operation::Plus) {
+      res = (x + y);
+    }
+  }
+}
+
+void VariableInStack::CallComparisonOperator(const std::shared_ptr<VariableInStack>& another,
+                                             std::shared_ptr<VariableInStack>& result,
+                                             const Operation& op) const {
+  result->Clear();
+  result->type_variable.id = TypeVariable::type_int;
+  result->Allocate();
+  int& res = *static_cast<int*>(result->memory);
+
+  if (another->type_variable.id == TypeVariable::type_int && type_variable.id == TypeVariable::type_int) {
+    auto& x = *static_cast<int*>(memory);
+    auto& y = *static_cast<int*>(another->memory);
+    if (op == Operation::EqualEqual) {
+      res = (x == y);
+    } else if (op == Operation::ExclamationMarkEqual) {
+      res = (x != y);
+    } else if (op == Operation::LAngle) {
+      res = (x < y);
+    } else if (op == Operation::RAngle) {
+      res = (x > y);
+    } else if (op == Operation::LAngleEqual) {
+      res = (x <= y);
+    } else if (op == Operation::RAngleEqual) {
+      res = (x >= y);
+    }
+  } else if (another->type_variable.id == TypeVariable::type_string
+      && type_variable.id == TypeVariable::type_string) {
+    auto& x = *static_cast<std::string*>(memory);
+    auto& y = *static_cast<std::string*>(another->memory);
+    if (op == Operation::EqualEqual) {
+      res = (x == y);
+    } else if (op == Operation::ExclamationMarkEqual) {
+      res = (x != y);
+    } else if (op == Operation::LAngle) {
+      res = (x < y);
+    } else if (op == Operation::RAngle) {
+      res = (x > y);
+    } else if (op == Operation::LAngleEqual) {
+      res = (x <= y);
+    } else if (op == Operation::RAngleEqual) {
+      res = (x >= y);
+    }
+  }
+}
+
+void VariableInStack::CallEqualOperator(const std::shared_ptr<VariableInStack>& another,
+                                        std::shared_ptr<VariableInStack>& result,
+                                        const Operation& op) {
+  if (type_variable.id != TypeVariable::none && type_variable.id != another->type_variable.id) {
+    throw std::logic_error("error variable convert");
+  }
+  if (result->type_variable.id != TypeVariable::none && result->type_variable.id != another->type_variable.id) {
+    throw std::logic_error("error variable convert");
+  }
+  result->Clear();
+  result->type_variable.id = another->type_variable.id;
+  result->Allocate();
+  if (op == Operation::Equal) {
+    Clear();
+    type_variable.id = another->type_variable.id;
+    Allocate();
+  }
+  if (another->type_variable.id == TypeVariable::type_int) {
+    CallEqualOperatorInt(another, result, op);
+  } else if (another->type_variable.id == TypeVariable::type_string) {
+    CallEqualOperatorString(another, result, op);
+  }
+}
+
+void VariableInStack::CallEqualOperatorString(const std::shared_ptr<VariableInStack>& another,
+                                              const std::shared_ptr<VariableInStack>& result,
+                                              const Operation& op) const {
+  std::string& x = *static_cast<std::string*>(memory);
+  std::string& y = *static_cast<std::string*>(another->memory);
+  std::string& res = *static_cast<std::string*>(result->memory);
+  if (op == Operation::Equal) {
+    if (this == another.get()) {
+      res = x;
+    } else {
+      res = x = y;
+    }
+  } else if (op == Operation::PlusEqual) {
+    if (this == another.get()) {
+      res += x;
+    } else {
+      res = x += y;
+    }
+  } else {
+    throw std::logic_error("invalid operation string");
+  }
+}
+
+void VariableInStack::CallEqualOperatorInt(const std::shared_ptr<VariableInStack>& another,
+                                           const std::shared_ptr<VariableInStack>& result,
+                                           const Operation& op) const {
+  int& x = *static_cast<int*>(memory);
+  int& y = *static_cast<int*>(another->memory);
+  int& res = *static_cast<int*>(result->memory);
+  if (op == Operation::Equal) {
+    if (this == another.get()) {
+      res = x;
+    } else {
+      res = x = y;
+    }
+  } else if (op == Operation::PlusEqual) {
+    if (this == another.get()) {
+      res += x;
+    } else {
+      res = x += y;
+    }
+  } else if (op == Operation::MinusEqual) {
+    if (this == another.get()) {
+      res -= x;
+    } else {
+      res = x -= y;
+    }
+  } else if (op == Operation::StarEqual) {
+    if (this == another.get()) {
+      res *= x;
+    } else {
+      res = x *= y;
+    }
+  } else {
+    if (this == another.get()) {
+      res /= x;
+    } else {
+      res = x /= y;
+    }
+  }
+}
+
+void VariableInStack::Clear() {
+  if (memory) {
+    if (type_variable.id == TypeVariable::ID::type_int) {
+      delete static_cast<int*>(memory);
+    } else if (type_variable.id == TypeVariable::ID::type_string) {
+      delete static_cast<std::string*>(memory);
+    }
+  }
+  memory = nullptr;
+}
+
+void VariableInStack::Allocate() {
+  if (type_variable.id == TypeVariable::ID::type_int) {
+    memory = new int();
+  } else if (type_variable.id == TypeVariable::ID::type_string) {
+    memory = new std::string();
+  }
+}
+
+void BlockWhile::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
+  if (check) {
+    while (true) {
+      check->Run(stack);
+      auto res = *((int*) stack.back()->memory);
+      stack.pop_back();
+      if (res) {
+        code->Run(stack);
+      } else {
+        break;
+      }
+    }
+  }
+}
+
+void BlockIf::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
+  if (check) {
+    check->Run(stack);
+    auto res = *((int*) stack.back()->memory);
+    stack.pop_back();
+    if (res) {
+      code->Run(stack);
+    }
+  }
+}
+
+void BlockFor::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
+  while (true) {
+    check->Run(stack);
+    auto res = *((int*) stack.back()->memory);
+    stack.pop_back();
+    if (!res) {
+      break;
+    }
+    code->Run(stack);
+    size_t sz = stack.size();
+    tick->Run(stack);
+    while (stack.size() != sz) {
+      stack.pop_back();
+    }
+  }
+}
+
+void HiddenDeallocateStack::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
+  for (size_t i = 0; i < count; ++i) {
+    stack.pop_back();
+  }
+}
+
+void DeallocateStack::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
+  for (size_t i = 0; i < count; ++i) {
     stack.pop_back();
   }
 }

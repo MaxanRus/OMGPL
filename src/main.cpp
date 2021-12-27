@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include "preprocessor.hpp"
 #include "lexer.hpp"
 #include "syntax_tree.hpp"
@@ -12,7 +13,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   std::ifstream fin(argv[1]);
-
   {
     std::string str;
     while (getline(fin, str)) {

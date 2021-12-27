@@ -2,9 +2,31 @@
 #include <stdexcept>
 #include <limits>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include "syntax_tree.hpp"
 
 using Type = Lexer::LexerToken::Type;
+
+std::optional<std::stringstream> output_print;
+
+void SetPrintStringStream() {
+  output_print = std::stringstream();
+}
+
+std::stringstream& GetPrintStringStream() {
+  if (output_print) {
+    return *output_print;
+  }
+  throw std::logic_error("not string stream");
+}
+
+std::ostream& GetPrintOstream() {
+  if (output_print) {
+    return *output_print;
+  }
+  return std::cout;
+}
 
 bool IsOperation(Type type) {
   switch (type) {
@@ -651,12 +673,12 @@ void CallFunction::Run(std::vector<std::shared_ptr<VariableInStack>>& stack) {
     for (size_t i = 0; i < parameters.size(); ++i) {
       std::shared_ptr<VariableInStack>& t = *(stack.end() - parameters.size() + i);
       if (t->type_variable.id == TypeVariable::ID::type_int) {
-        std::cout << *((int*) t->memory) << " ";
+        GetPrintOstream() << *((int*) t->memory) << (i + 1 != parameters.size() ? " " : "");
       } else if (t->type_variable.id == TypeVariable::ID::type_string) {
-        std::cout << *((std::string*) t->memory) << " ";
+        GetPrintOstream() << *((std::string*) t->memory) << (i + 1 != parameters.size() ? " " : "");
       }
     }
-    std::cout << std::endl;
+    GetPrintOstream() << std::endl;
   }
 }
 

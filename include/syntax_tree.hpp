@@ -10,6 +10,9 @@ struct Variable;
 struct VariableInStack;
 struct Expression;
 
+void SetPrintStringStream();
+std::stringstream& GetPrintStringStream();
+
 struct Node {
   Node* parent = nullptr;
   Node* next = nullptr;

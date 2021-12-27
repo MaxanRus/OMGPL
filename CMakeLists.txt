@@ -26,6 +26,14 @@ set(TEST_FILES
 
 add_executable(OMGL src/main.cpp ${SOURCE_FILES})
 
-# add_executable(Test tests/MainTest.cpp ${TEST_FILES} ${SOURCE_FILES})
+add_executable(Test tests/MainTest.cpp ${TEST_FILES} ${SOURCE_FILES})
 
-# target_link_libraries(Test ${GTEST_LIBRARIES} Threads::Threads)
+target_link_libraries(Test ${GTEST_LIBRARIES} Threads::Threads)
+
+add_custom_target(copy-files ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/tests/programs/
+        ${CMAKE_BINARY_DIR}/programs
+        )
+
+add_dependencies(Test copy-files)
